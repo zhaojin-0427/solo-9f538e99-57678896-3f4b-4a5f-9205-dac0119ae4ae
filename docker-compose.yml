@@ -1,7 +1,7 @@
 services:
   watershed-api:
     build: .
-    image: watershed-grid-api:1.0.0
+    image: watershed-grid-api:1.1.0
     container_name: watershed-grid-api
     ports:
       - "8000:8000"

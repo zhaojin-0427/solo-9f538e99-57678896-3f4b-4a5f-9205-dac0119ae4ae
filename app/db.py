@@ -104,18 +104,55 @@ class Database:
         """加载某一版的流域与网格（WKB 反序列化）。"""
         conn = self._connect()
         try:
-            vrow = conn.execute(
-                "SELECT watershed_wkb FROM versions WHERE version = ?", (version,)
+            return self._load_snapshot(conn, version)
+        finally:
+            conn.close()
+
+    def _load_snapshot(
+        self, conn: sqlite3.Connection, version: int
+    ) -> tuple[BaseGeometry, list[tuple[str, BaseGeometry]]]:
+        vrow = conn.execute(
+            "SELECT watershed_wkb FROM versions WHERE version = ?", (version,)
+        ).fetchone()
+        if vrow is None:
+            raise VersionNotFound(f"版本 {version} 不存在")
+        watershed = wkb.loads(vrow["watershed_wkb"])
+        grows = conn.execute(
+            "SELECT grid_id, geom_wkb FROM grids WHERE version = ? ORDER BY grid_id",
+            (version,),
+        ).fetchall()
+        grids = [(row["grid_id"], wkb.loads(row["geom_wkb"])) for row in grows]
+        return watershed, grids
+
+    def resolve_version_and_snapshot(
+        self, requested_version: int | None
+    ) -> tuple[int, bool, BaseGeometry, list[tuple[str, BaseGeometry]]]:
+        """在同一个连接内解析版号并加载整版快照。
+
+        requested_version 为 None 时取当前版（尚无版本抛 VersionNotFound）。
+        版号解析与网格读取在一次只读事务中完成：并发发布只会新增版本行、
+        永不修改旧版行，因此一次诊断拿到的版号、邻接关系必然来自同一版本，
+        不会与返回版号错配。
+        """
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN")
+            row = conn.execute(
+                "SELECT value FROM meta WHERE key = 'current_version'"
             ).fetchone()
-            if vrow is None:
-                raise VersionNotFound(f"版本 {version} 不存在")
-            watershed = wkb.loads(vrow["watershed_wkb"])
-            grows = conn.execute(
-                "SELECT grid_id, geom_wkb FROM grids WHERE version = ? ORDER BY grid_id",
-                (version,),
-            ).fetchall()
-            grids = [(row["grid_id"], wkb.loads(row["geom_wkb"])) for row in grows]
-            return watershed, grids
+            current = int(row["value"]) if row else None
+            if requested_version is None:
+                if current is None:
+                    raise VersionNotFound("尚无已发布版本，请先调用 /publish")
+                version = current
+            else:
+                version = requested_version
+            watershed, grids = self._load_snapshot(conn, version)
+            conn.commit()
+            return version, (version == current), watershed, grids
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

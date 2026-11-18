@@ -178,3 +178,31 @@ def classify_point(
             return {"status": "boundary", "grid_id": None, "grid_ids": near}
 
     return {"status": "outside", "grid_id": None, "grid_ids": []}
+
+
+def shared_edge_length(geom_a: BaseGeometry, geom_b: BaseGeometry) -> float:
+    """两个面几何共享的边界长度。
+
+    仅统计两者边界的一维交集（共边）长度；仅共点 / 角点相接时交集是零维
+    Point/MultiPoint，长度为 0；互不接触时长度也为 0。
+    MultiPolygon 的多片边界一并计入。
+    """
+    return float(geom_a.boundary.intersection(geom_b.boundary).length)
+
+
+def build_adjacency(
+    grids: list[tuple[str, BaseGeometry]],
+) -> dict[str, set[str]]:
+    """构建网格邻接表：只有共享非零长度边界（共边）的网格才算相邻。
+
+    仅共点（角点相接）、互不接触的网格不会出现在彼此的邻接集合中。
+    """
+    adjacency: dict[str, set[str]] = {grid_id: set() for grid_id, _ in grids}
+    for i in range(len(grids)):
+        id_a, geom_a = grids[i]
+        for j in range(i + 1, len(grids)):
+            id_b, geom_b = grids[j]
+            if shared_edge_length(geom_a, geom_b) > 0.0:
+                adjacency[id_a].add(id_b)
+                adjacency[id_b].add(id_a)
+    return adjacency
